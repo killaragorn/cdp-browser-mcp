@@ -105,24 +105,58 @@ Or copy the debug URL from AdsPower / BitBrowser (often `http://127.0.0.1:xxxx`)
 2. Ask the agent to connect, then operate the page:
 
 - `cdp_connect` → `{ "cdp_url": "http://127.0.0.1:9222" }` → `session_id`
-- `cdp_navigate` / `cdp_click` / `cdp_type` / `cdp_screenshot` / …
+- `cdp_type` with `mode=fill|type|insert`, or `cdp_press` for `Enter` / `Control+A`
+- `cdp_network_log` / `cdp_wait_response` for captured traffic
 - `cdp_close` when finished
 
 ## Tools
+
+Connect first with `cdp_connect` (network capture starts automatically), then pass `session_id` to the rest.
+
+**Session / navigation**
 
 | Tool | Purpose |
 | --- | --- |
 | `cdp_connect` | Attach to a CDP HTTP or WebSocket URL; returns `session_id` |
 | `cdp_navigate` | Open a URL |
-| `cdp_screenshot` | PNG screenshot (image content) |
-| `cdp_click` | Click a CSS selector or `(x, y)` |
-| `cdp_type` | Type into a selector |
-| `cdp_evaluate` | Run JavaScript in the page |
-| `cdp_wait` | Wait for a selector or a timeout |
-| `cdp_set_cookies` | Write cookies on the context |
+| `cdp_reload` | Reload |
+| `cdp_go_back` | History back |
 | `cdp_page_info` | URL, title, frames |
+| `cdp_content` | Page HTML or a selector's innerHTML |
+| `cdp_screenshot` | PNG screenshot |
 | `cdp_list_sessions` | List active sessions |
 | `cdp_close` | Disconnect one session |
+
+**Input**
+
+| Tool | Purpose |
+| --- | --- |
+| `cdp_click` | Click selector or `(x, y)`; `button`, `click_count`, `modifiers` |
+| `cdp_hover` | Hover a selector |
+| `cdp_mouse_move` | Move mouse to coordinates |
+| `cdp_type` | Input text: `mode=fill` / `type` (key events) / `insert` (paste-like); optional `press_enter` |
+| `cdp_press` | Key or shortcut: `Enter`, `Tab`, `Control+A` |
+| `cdp_select` | `<select>` by value / label / index |
+| `cdp_check` | Check or uncheck |
+| `cdp_upload` | File input (`files` are local paths on the MCP host) |
+| `cdp_scroll` | Into view, mouse wheel, or `scrollTo` |
+| `cdp_evaluate` | Run JavaScript |
+| `cdp_wait` | Wait for a selector or a timeout |
+
+**Network**
+
+| Tool | Purpose |
+| --- | --- |
+| `cdp_network_log` | List captured requests; filter with `url_contains` / `method` / `status`; `include_body` for xhr/fetch/JSON |
+| `cdp_network_clear` | Clear the buffer (last 400 requests kept) |
+| `cdp_wait_response` | Wait for a response whose URL contains a string |
+
+**Cookies**
+
+| Tool | Purpose |
+| --- | --- |
+| `cdp_get_cookies` | Read cookies |
+| `cdp_set_cookies` | Write cookies |
 
 ## Why this exists
 

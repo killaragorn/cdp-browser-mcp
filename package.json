@@ -1,6 +1,6 @@
 {
   "name": "cdp-browser-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server that attaches to existing Chromium browsers over CDP. Multi-session control for Chrome, Edge, AdsPower, BitBrowser, and any remote-debugging endpoint.",
   "type": "module",
   "main": "index.mjs",
@@ -9,12 +9,14 @@
   },
   "files": [
     "index.mjs",
+    "network.mjs",
     "README.md",
     "LICENSE",
     "server.json"
   ],
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs",
+    "test": "node --test network.test.mjs"
   },
   "mcpName": "io.github.killaragorn/cdp-browser-mcp",
   "engines": {

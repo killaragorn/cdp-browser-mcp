@@ -6,9 +6,18 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { chromium } from "patchright";
+import {
+  clipBody,
+  createNetworkState,
+  queryNetwork,
+  recordFailure,
+  recordRequest,
+  recordResponse,
+  shouldCaptureBody,
+} from "./network.mjs";
 
 const NAME = "cdp-browser-mcp";
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   process.stdout.write(
@@ -24,7 +33,6 @@ if (process.argv.includes("--version") || process.argv.includes("-v")) {
   process.exit(0);
 }
 
-// ── session store ──────────────────────────────────────────────
 const sessions = new Map();
 let seq = 0;
 
@@ -34,12 +42,51 @@ function getSession(id) {
   return s;
 }
 
-// ── tool definitions ───────────────────────────────────────────
+function attachNetwork(page, net) {
+  page.on("request", (request) => {
+    recordRequest(net, request, {
+      method: request.method(),
+      url: request.url(),
+      resourceType: request.resourceType(),
+      headers: request.headers(),
+      postData: request.postData(),
+    });
+  });
+  page.on("response", (response) => {
+    const request = response.request();
+    const headers = response.headers();
+    const rec = recordResponse(net, request, {
+      status: response.status(),
+      headers,
+    });
+    if (!rec) return;
+    const contentType = headers["content-type"] || headers["Content-Type"] || "";
+    if (!shouldCaptureBody(request.resourceType(), contentType)) return;
+    response
+      .text()
+      .then((text) => {
+        const clipped = clipBody(text);
+        rec.body = clipped.body;
+        rec.bodyTruncated = clipped.bodyTruncated;
+        rec.bodySize = clipped.bodySize;
+      })
+      .catch(() => {});
+  });
+  page.on("requestfailed", (request) => {
+    recordFailure(net, request, request.failure()?.errorText);
+  });
+}
+
+const sessionId = {
+  type: "string",
+  description: "Session id returned by cdp_connect",
+};
+
 const TOOLS = [
   {
     name: "cdp_connect",
     description:
-      "Attach to an already-running Chromium browser via CDP (does not launch a browser). Accepts HTTP (http://127.0.0.1:9222) or WebSocket URLs. Works with Chrome/Edge --remote-debugging-port, AdsPower, BitBrowser, GoLogin, and cloud CDP endpoints. Returns session_id for later tools.",
+      "Attach to an already-running Chromium browser via CDP (does not launch a browser). Accepts HTTP (http://127.0.0.1:9222) or WebSocket URLs. Works with Chrome/Edge --remote-debugging-port, AdsPower, BitBrowser, GoLogin, and cloud CDP endpoints. Starts network capture. Returns session_id for later tools.",
     inputSchema: {
       type: "object",
       properties: {
@@ -58,7 +105,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        session_id: { type: "string" },
+        session_id: sessionId,
         url: { type: "string" },
         wait_until: {
           type: "string",
@@ -70,13 +117,299 @@ const TOOLS = [
     },
   },
   {
+    name: "cdp_reload",
+    description: "Reload the current page.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        wait_until: {
+          type: "string",
+          enum: ["load", "domcontentloaded", "networkidle", "commit"],
+          default: "domcontentloaded",
+        },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_go_back",
+    description: "Go back in history.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: sessionId },
+      required: ["session_id"],
+    },
+  },
+  {
     name: "cdp_screenshot",
     description: "Capture the current page as a PNG screenshot (returned as image content).",
     inputSchema: {
       type: "object",
       properties: {
-        session_id: { type: "string" },
+        session_id: sessionId,
         full_page: { type: "boolean", default: false },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_click",
+    description:
+      "Click an element by CSS selector, or click at page coordinates (x, y). Supports right/middle click, double-click, and modifier keys.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+        button: { type: "string", enum: ["left", "right", "middle"], default: "left" },
+        click_count: { type: "number", default: 1, description: "2 for double-click" },
+        modifiers: {
+          type: "array",
+          items: { type: "string", enum: ["Alt", "Control", "Meta", "Shift"] },
+        },
+        force: { type: "boolean", default: false },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_hover",
+    description: "Hover the mouse over an element matched by CSS selector.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+      },
+      required: ["session_id", "selector"],
+    },
+  },
+  {
+    name: "cdp_mouse_move",
+    description: "Move the mouse to page coordinates without clicking.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        x: { type: "number" },
+        y: { type: "number" },
+      },
+      required: ["session_id", "x", "y"],
+    },
+  },
+  {
+    name: "cdp_type",
+    description:
+      "Input text. With selector: fill the element (or type key-by-key). Without selector: type into the focused element. Modes: fill (replace value), type (real key events), insert (paste-like, no key events).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        text: { type: "string" },
+        selector: { type: "string" },
+        mode: {
+          type: "string",
+          enum: ["fill", "type", "insert"],
+          default: "fill",
+          description:
+            "fill=set value; type=keydown/keypress; insert=insertText (IME/paste style)",
+        },
+        delay: {
+          type: "number",
+          default: 0,
+          description: "Delay in ms between keystrokes when mode=type",
+        },
+        clear: {
+          type: "boolean",
+          description: "Deprecated. false is the same as mode=type",
+        },
+        press_enter: {
+          type: "boolean",
+          default: false,
+          description: "Press Enter after typing",
+        },
+      },
+      required: ["session_id", "text"],
+    },
+  },
+  {
+    name: "cdp_press",
+    description:
+      'Press a key or shortcut, e.g. "Enter", "Tab", "Escape", "Control+A", "Meta+V". Optional selector focuses that element first.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        key: { type: "string" },
+        selector: { type: "string" },
+      },
+      required: ["session_id", "key"],
+    },
+  },
+  {
+    name: "cdp_select",
+    description: "Choose option(s) on a <select> element by value, label, or index.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+        value: { type: "string" },
+        values: { type: "array", items: { type: "string" } },
+        label: { type: "string" },
+        index: { type: "number" },
+      },
+      required: ["session_id", "selector"],
+    },
+  },
+  {
+    name: "cdp_check",
+    description: "Check or uncheck a checkbox / radio.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+        checked: { type: "boolean", default: true },
+      },
+      required: ["session_id", "selector"],
+    },
+  },
+  {
+    name: "cdp_upload",
+    description:
+      "Set files on an <input type=file>. Paths must exist on the machine running this MCP server.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+        files: { type: "array", items: { type: "string" } },
+      },
+      required: ["session_id", "selector", "files"],
+    },
+  },
+  {
+    name: "cdp_scroll",
+    description:
+      "Scroll an element into view, wheel by delta, or jump to page coordinates.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+        delta_x: { type: "number" },
+        delta_y: { type: "number" },
+        x: { type: "number", description: "window.scrollTo x" },
+        y: { type: "number", description: "window.scrollTo y" },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_evaluate",
+    description: "Run a JavaScript expression in the page and return the JSON-serializable result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        expression: { type: "string" },
+      },
+      required: ["session_id", "expression"],
+    },
+  },
+  {
+    name: "cdp_content",
+    description:
+      "Get page HTML, or innerHTML of a selector. Large documents are truncated.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+        max_chars: { type: "number", default: 200000 },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_page_info",
+    description: "Return the current page URL, title, and frame URLs.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: sessionId },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_wait",
+    description:
+      "Wait until a CSS selector appears, or wait a fixed timeout in milliseconds if no selector is given.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        selector: { type: "string" },
+        timeout: { type: "number", default: 30000 },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_network_log",
+    description:
+      "Return captured HTTP traffic (started automatically on connect). Default: last 50 entries, no bodies/headers. Filter with url_contains, method, resource_type, status. Set include_body / include_headers for detail. Bodies are kept for xhr/fetch/document and JSON (truncated to 32KB).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        url_contains: { type: "string" },
+        method: { type: "string" },
+        resource_type: { type: "string" },
+        status: { type: "number" },
+        limit: { type: "number", default: 50 },
+        include_headers: { type: "boolean", default: false },
+        include_body: { type: "boolean", default: false },
+      },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_network_clear",
+    description: "Clear the captured network log for this session.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: sessionId },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "cdp_wait_response",
+    description:
+      "Wait until a response whose URL contains url_contains (optional method/status). Returns status, headers, and a truncated body.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        url_contains: { type: "string" },
+        method: { type: "string" },
+        status: { type: "number" },
+        timeout: { type: "number", default: 30000 },
+      },
+      required: ["session_id", "url_contains"],
+    },
+  },
+  {
+    name: "cdp_get_cookies",
+    description: "Read cookies from the browser context. Optional url limits the set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        url: { type: "string" },
       },
       required: ["session_id"],
     },
@@ -87,7 +420,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        session_id: { type: "string" },
+        session_id: sessionId,
         cookies: {
           type: "array",
           items: {
@@ -108,72 +441,6 @@ const TOOLS = [
     },
   },
   {
-    name: "cdp_click",
-    description: "Click an element by CSS selector, or click at page coordinates (x, y).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session_id: { type: "string" },
-        selector: { type: "string" },
-        x: { type: "number" },
-        y: { type: "number" },
-      },
-      required: ["session_id"],
-    },
-  },
-  {
-    name: "cdp_type",
-    description: "Type text into the element matched by CSS selector. Clears the field first unless clear=false.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session_id: { type: "string" },
-        selector: { type: "string" },
-        text: { type: "string" },
-        clear: {
-          type: "boolean",
-          default: true,
-          description: "Clear existing value before typing",
-        },
-      },
-      required: ["session_id", "selector", "text"],
-    },
-  },
-  {
-    name: "cdp_evaluate",
-    description: "Run a JavaScript expression in the page and return the JSON-serializable result.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session_id: { type: "string" },
-        expression: { type: "string" },
-      },
-      required: ["session_id", "expression"],
-    },
-  },
-  {
-    name: "cdp_page_info",
-    description: "Return the current page URL, title, and frame URLs.",
-    inputSchema: {
-      type: "object",
-      properties: { session_id: { type: "string" } },
-      required: ["session_id"],
-    },
-  },
-  {
-    name: "cdp_wait",
-    description: "Wait until a CSS selector appears, or wait a fixed timeout in milliseconds if no selector is given.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session_id: { type: "string" },
-        selector: { type: "string" },
-        timeout: { type: "number", default: 30000 },
-      },
-      required: ["session_id"],
-    },
-  },
-  {
     name: "cdp_list_sessions",
     description: "List all active CDP sessions in this MCP process.",
     inputSchema: { type: "object", properties: {} },
@@ -183,13 +450,12 @@ const TOOLS = [
     description: "Disconnect this session from the browser and drop it from the session list.",
     inputSchema: {
       type: "object",
-      properties: { session_id: { type: "string" } },
+      properties: { session_id: sessionId },
       required: ["session_id"],
     },
   },
 ];
 
-// ── tool handlers ──────────────────────────────────────────────
 async function handleTool(name, args) {
   switch (name) {
     case "cdp_connect": {
@@ -204,8 +470,10 @@ async function handleTool(name, args) {
       const context = contexts[0] || (await browser.newContext());
       const pages = context.pages();
       const page = pages[0] || (await context.newPage());
+      const net = createNetworkState();
+      attachNetwork(page, net);
       const id = `s${++seq}`;
-      sessions.set(id, { browser, context, page, cdp: args.cdp_url });
+      sessions.set(id, { browser, context, page, cdp: args.cdp_url, net });
       return {
         session_id: id,
         url: page.url(),
@@ -218,6 +486,21 @@ async function handleTool(name, args) {
       const s = getSession(args.session_id);
       const waitUntil = args.wait_until || "domcontentloaded";
       await s.page.goto(args.url, { waitUntil, timeout: 60000 });
+      return { url: s.page.url(), title: await s.page.title() };
+    }
+
+    case "cdp_reload": {
+      const s = getSession(args.session_id);
+      await s.page.reload({
+        waitUntil: args.wait_until || "domcontentloaded",
+        timeout: 60000,
+      });
+      return { url: s.page.url(), title: await s.page.title() };
+    }
+
+    case "cdp_go_back": {
+      const s = getSession(args.session_id);
+      await s.page.goBack({ waitUntil: "domcontentloaded", timeout: 30000 });
       return { url: s.page.url(), title: await s.page.title() };
     }
 
@@ -234,46 +517,147 @@ async function handleTool(name, args) {
       };
     }
 
-    case "cdp_set_cookies": {
-      const s = getSession(args.session_id);
-      const cookies = args.cookies.map((c) => ({
-        name: c.name,
-        value: c.value,
-        domain: c.domain,
-        path: c.path || "/",
-        httpOnly: c.httpOnly ?? false,
-        secure: c.secure ?? true,
-      }));
-      await s.context.addCookies(cookies);
-      return { set: cookies.length };
-    }
-
     case "cdp_click": {
       const s = getSession(args.session_id);
+      const opts = { timeout: 10000 };
+      if (args.button) opts.button = args.button;
+      if (args.click_count) opts.clickCount = args.click_count;
+      if (args.modifiers) opts.modifiers = args.modifiers;
+      if (args.force) opts.force = true;
       if (args.selector) {
-        await s.page.click(args.selector, { timeout: 10000 });
+        await s.page.click(args.selector, opts);
       } else if (args.x != null && args.y != null) {
-        await s.page.mouse.click(args.x, args.y);
+        await s.page.mouse.click(args.x, args.y, {
+          button: args.button || "left",
+          clickCount: args.click_count || 1,
+        });
       } else {
         throw new Error("provide selector or (x, y)");
       }
       return { clicked: args.selector || `(${args.x},${args.y})` };
     }
 
+    case "cdp_hover": {
+      const s = getSession(args.session_id);
+      await s.page.hover(args.selector, { timeout: 10000 });
+      return { hovered: args.selector };
+    }
+
+    case "cdp_mouse_move": {
+      const s = getSession(args.session_id);
+      await s.page.mouse.move(args.x, args.y);
+      return { x: args.x, y: args.y };
+    }
+
     case "cdp_type": {
       const s = getSession(args.session_id);
-      if (args.clear !== false) {
-        await s.page.fill(args.selector, args.text, { timeout: 10000 });
-      } else {
-        await s.page.locator(args.selector).pressSequentially(args.text);
+      const delay = args.delay || 0;
+      let mode = args.mode;
+      if (!mode) {
+        if (args.clear === false) mode = "type";
+        else mode = args.selector ? "fill" : "type";
       }
-      return { typed: args.text.length };
+      if (mode === "insert") {
+        if (args.selector) await s.page.click(args.selector, { timeout: 10000 });
+        await s.page.keyboard.insertText(args.text);
+      } else if (mode === "type") {
+        if (args.selector) {
+          const loc = s.page.locator(args.selector);
+          await loc.click({ timeout: 10000 });
+          await loc.pressSequentially(args.text, { delay });
+        } else {
+          await s.page.keyboard.type(args.text, { delay });
+        }
+      } else {
+        if (!args.selector) {
+          throw new Error("mode=fill requires selector; use mode=type or insert without one");
+        }
+        if (delay) {
+          const loc = s.page.locator(args.selector);
+          await loc.fill("", { timeout: 10000 });
+          await loc.pressSequentially(args.text, { delay });
+        } else {
+          await s.page.fill(args.selector, args.text, { timeout: 10000 });
+        }
+      }
+      if (args.press_enter) await s.page.keyboard.press("Enter");
+      return { typed: args.text.length, mode };
+    }
+
+    case "cdp_press": {
+      const s = getSession(args.session_id);
+      if (args.selector) {
+        await s.page.locator(args.selector).press(args.key, { timeout: 10000 });
+      } else {
+        await s.page.keyboard.press(args.key);
+      }
+      return { pressed: args.key };
+    }
+
+    case "cdp_select": {
+      const s = getSession(args.session_id);
+      let option;
+      if (args.values) option = args.values;
+      else if (args.value != null) option = args.value;
+      else if (args.label != null) option = { label: args.label };
+      else if (args.index != null) option = { index: args.index };
+      else throw new Error("provide value, values, label, or index");
+      const selected = await s.page.selectOption(args.selector, option, { timeout: 10000 });
+      return { selected };
+    }
+
+    case "cdp_check": {
+      const s = getSession(args.session_id);
+      if (args.checked === false) {
+        await s.page.uncheck(args.selector, { timeout: 10000 });
+      } else {
+        await s.page.check(args.selector, { timeout: 10000 });
+      }
+      return { checked: args.checked !== false };
+    }
+
+    case "cdp_upload": {
+      const s = getSession(args.session_id);
+      await s.page.setInputFiles(args.selector, args.files, { timeout: 10000 });
+      return { files: args.files.length };
+    }
+
+    case "cdp_scroll": {
+      const s = getSession(args.session_id);
+      if (args.selector) {
+        await s.page.locator(args.selector).scrollIntoViewIfNeeded();
+        return { scrolled: args.selector };
+      }
+      if (args.delta_x != null || args.delta_y != null) {
+        const dx = args.delta_x || 0;
+        const dy = args.delta_y || 0;
+        await s.page.mouse.wheel(dx, dy);
+        return { wheel: { x: dx, y: dy } };
+      }
+      if (args.x != null || args.y != null) {
+        await s.page.evaluate(
+          ([x, y]) => window.scrollTo(x ?? window.scrollX, y ?? window.scrollY),
+          [args.x ?? null, args.y ?? null]
+        );
+        return { to: { x: args.x, y: args.y } };
+      }
+      throw new Error("provide selector, (delta_x, delta_y), or (x, y)");
     }
 
     case "cdp_evaluate": {
       const s = getSession(args.session_id);
       const result = await s.page.evaluate(args.expression);
       return { result };
+    }
+
+    case "cdp_content": {
+      const s = getSession(args.session_id);
+      const max = args.max_chars || 200000;
+      const html = args.selector
+        ? await s.page.locator(args.selector).innerHTML({ timeout: 10000 })
+        : await s.page.content();
+      if (html.length <= max) return { html, truncated: false };
+      return { html: html.slice(0, max), truncated: true, length: html.length };
     }
 
     case "cdp_page_info": {
@@ -291,6 +675,70 @@ async function handleTool(name, args) {
       }
       await s.page.waitForTimeout(timeout);
       return { waited: timeout };
+    }
+
+    case "cdp_network_log": {
+      const s = getSession(args.session_id);
+      const entries = queryNetwork(s.net.entries, args);
+      return { count: entries.length, total: s.net.entries.length, entries };
+    }
+
+    case "cdp_network_clear": {
+      const s = getSession(args.session_id);
+      s.net.entries.length = 0;
+      return { cleared: true };
+    }
+
+    case "cdp_wait_response": {
+      const s = getSession(args.session_id);
+      const timeout = args.timeout || 30000;
+      const method = args.method ? String(args.method).toUpperCase() : null;
+      const resp = await s.page.waitForResponse(
+        (r) => {
+          if (!r.url().includes(args.url_contains)) return false;
+          if (method && r.request().method() !== method) return false;
+          if (args.status != null && r.status() !== args.status) return false;
+          return true;
+        },
+        { timeout }
+      );
+      let body = null;
+      let bodyTruncated = false;
+      try {
+        const clipped = clipBody(await resp.text());
+        body = clipped.body;
+        bodyTruncated = clipped.bodyTruncated;
+      } catch {}
+      return {
+        url: resp.url(),
+        status: resp.status(),
+        ok: resp.ok(),
+        headers: resp.headers(),
+        body,
+        bodyTruncated,
+      };
+    }
+
+    case "cdp_get_cookies": {
+      const s = getSession(args.session_id);
+      const cookies = args.url
+        ? await s.context.cookies(args.url)
+        : await s.context.cookies();
+      return { cookies };
+    }
+
+    case "cdp_set_cookies": {
+      const s = getSession(args.session_id);
+      const cookies = args.cookies.map((c) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || "/",
+        httpOnly: c.httpOnly ?? false,
+        secure: c.secure ?? true,
+      }));
+      await s.context.addCookies(cookies);
+      return { set: cookies.length };
     }
 
     case "cdp_list_sessions": {
@@ -315,7 +763,6 @@ async function handleTool(name, args) {
   }
 }
 
-// ── MCP server ─────────────────────────────────────────────────
 const server = new Server(
   { name: NAME, version: VERSION },
   { capabilities: { tools: {} } }
