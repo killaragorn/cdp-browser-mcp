@@ -104,20 +104,20 @@ Or copy the debug URL from AdsPower / BitBrowser (often `http://127.0.0.1:xxxx`)
 
 2. Ask the agent to connect, then operate the page:
 
-- `cdp_connect` → `{ "cdp_url": "http://127.0.0.1:9222" }` → `session_id`
-- `cdp_type` with `mode=fill|type|insert`, or `cdp_press` for `Enter` / `Control+A`
-- `cdp_network_log` / `cdp_wait_response` for captured traffic
+- `cdp_connect` → `{ "cdp_url": "http://127.0.0.1:9222", "capture_dir": "D:/captures/run1" }`
+- or `cdp_network_start` with `dir` after connect
+- Each request is saved as `{dir}/000001_GET_host-path.json` plus `requests.jsonl`
 - `cdp_close` when finished
 
 ## Tools
 
-Connect first with `cdp_connect` (network capture starts automatically), then pass `session_id` to the rest.
+Connect first with `cdp_connect`. Network capture stays **off** unless you pass `capture_dir` or call `cdp_network_start`.
 
 **Session / navigation**
 
 | Tool | Purpose |
 | --- | --- |
-| `cdp_connect` | Attach to a CDP HTTP or WebSocket URL; returns `session_id` |
+| `cdp_connect` | Attach to a CDP URL; optional `capture_dir` starts saving requests to that folder |
 | `cdp_navigate` | Open a URL |
 | `cdp_reload` | Reload |
 | `cdp_go_back` | History back |
@@ -145,10 +145,21 @@ Connect first with `cdp_connect` (network capture starts automatically), then pa
 
 **Network**
 
+Capture is off by default. Pass `capture_dir` on connect, or call `cdp_network_start`. Every matching request is written to disk with **no count limit**. xhr/fetch/document/JSON response bodies are stored in full.
+
+```
+{capture_dir}/
+  capture.json
+  requests.jsonl
+  000001_GET_example.com-.json
+  000002_POST_api.example.com-login.json
+```
+
 | Tool | Purpose |
 | --- | --- |
-| `cdp_network_log` | List captured requests; filter with `url_contains` / `method` / `status`; `include_body` for xhr/fetch/JSON |
-| `cdp_network_clear` | Clear the buffer (last 400 requests kept) |
+| `cdp_network_start` | Start capture into `dir`; optional `url_contains` / `method` / `resource_type` |
+| `cdp_network_stop` | Stop capture; files on disk are kept |
+| `cdp_network_log` | List saved files (default last 50 summaries) |
 | `cdp_wait_response` | Wait for a response whose URL contains a string |
 
 **Cookies**

@@ -7,9 +7,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { chromium } from "patchright";
 import {
+  beginCapture,
   clipBody,
   createNetworkState,
-  queryNetwork,
+  disableCapture,
+  persistEntry,
+  querySaved,
   recordFailure,
   recordRequest,
   recordResponse,
@@ -17,7 +20,7 @@ import {
 } from "./network.mjs";
 
 const NAME = "cdp-browser-mcp";
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   process.stdout.write(
@@ -60,20 +63,21 @@ function attachNetwork(page, net) {
       headers,
     });
     if (!rec) return;
-    const contentType = headers["content-type"] || headers["Content-Type"] || "";
-    if (!shouldCaptureBody(request.resourceType(), contentType)) return;
-    response
-      .text()
-      .then((text) => {
-        const clipped = clipBody(text);
-        rec.body = clipped.body;
-        rec.bodyTruncated = clipped.bodyTruncated;
-        rec.bodySize = clipped.bodySize;
-      })
-      .catch(() => {});
+    const finish = async () => {
+      const contentType = headers["content-type"] || headers["Content-Type"] || "";
+      if (shouldCaptureBody(request.resourceType(), contentType)) {
+        try {
+          rec.body = await response.text();
+          rec.bodySize = rec.body.length;
+        } catch {}
+      }
+      await persistEntry(net, rec);
+    };
+    finish().catch(() => {});
   });
   page.on("requestfailed", (request) => {
-    recordFailure(net, request, request.failure()?.errorText);
+    const rec = recordFailure(net, request, request.failure()?.errorText);
+    if (rec) persistEntry(net, rec).catch(() => {});
   });
 }
 
@@ -86,7 +90,7 @@ const TOOLS = [
   {
     name: "cdp_connect",
     description:
-      "Attach to an already-running Chromium browser via CDP (does not launch a browser). Accepts HTTP (http://127.0.0.1:9222) or WebSocket URLs. Works with Chrome/Edge --remote-debugging-port, AdsPower, BitBrowser, GoLogin, and cloud CDP endpoints. Starts network capture. Returns session_id for later tools.",
+      "Attach to an already-running Chromium browser via CDP (does not launch a browser). Accepts HTTP (http://127.0.0.1:9222) or WebSocket URLs. Pass capture_dir to start saving every matching request as JSON into that folder (no count limit). Returns session_id for later tools.",
     inputSchema: {
       type: "object",
       properties: {
@@ -94,6 +98,20 @@ const TOOLS = [
           type: "string",
           description:
             'CDP WebSocket or HTTP URL, e.g. "ws://127.0.0.1:9222" or "http://127.0.0.1:9222"',
+        },
+        capture_dir: {
+          type: "string",
+          description:
+            "If set, start network capture and write each request to this directory as JSON. Omit to leave capture off.",
+        },
+        capture_url_contains: {
+          type: "string",
+          description: "Only save requests whose URL contains this string",
+        },
+        capture_method: { type: "string", description: "Only save this HTTP method, e.g. POST" },
+        capture_resource_type: {
+          type: "string",
+          description: "Only save this Playwright resource type, e.g. xhr, fetch, document",
         },
       },
       required: ["cdp_url"],
@@ -359,9 +377,34 @@ const TOOLS = [
     },
   },
   {
+    name: "cdp_network_start",
+    description:
+      "Start network capture for this session. Every matching request is written as a JSON file into dir (plus requests.jsonl). No count limit. Call before navigating if you need the first document request.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: sessionId,
+        dir: { type: "string", description: "Directory to save captured requests" },
+        url_contains: { type: "string" },
+        method: { type: "string" },
+        resource_type: { type: "string" },
+      },
+      required: ["session_id", "dir"],
+    },
+  },
+  {
+    name: "cdp_network_stop",
+    description: "Stop capturing. Files already written to dir are kept.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: sessionId },
+      required: ["session_id"],
+    },
+  },
+  {
     name: "cdp_network_log",
     description:
-      "Return captured HTTP traffic (started automatically on connect). Default: last 50 entries, no bodies/headers. Filter with url_contains, method, resource_type, status. Set include_body / include_headers for detail. Bodies are kept for xhr/fetch/document and JSON (truncated to 32KB).",
+      "List requests already saved on disk. Default last 50 summaries. Use include_body / include_headers to read the JSON files. Capture must have a dir (from cdp_connect capture_dir or cdp_network_start).",
     inputSchema: {
       type: "object",
       properties: {
@@ -374,15 +417,6 @@ const TOOLS = [
         include_headers: { type: "boolean", default: false },
         include_body: { type: "boolean", default: false },
       },
-      required: ["session_id"],
-    },
-  },
-  {
-    name: "cdp_network_clear",
-    description: "Clear the captured network log for this session.",
-    inputSchema: {
-      type: "object",
-      properties: { session_id: sessionId },
       required: ["session_id"],
     },
   },
@@ -474,12 +508,22 @@ async function handleTool(name, args) {
       attachNetwork(page, net);
       const id = `s${++seq}`;
       sessions.set(id, { browser, context, page, cdp: args.cdp_url, net });
-      return {
+      const out = {
         session_id: id,
         url: page.url(),
         title: await page.title(),
         pages: pages.length,
+        capture: null,
       };
+      if (args.capture_dir) {
+        out.capture = await beginCapture(net, {
+          dir: args.capture_dir,
+          url_contains: args.capture_url_contains,
+          method: args.capture_method,
+          resource_type: args.capture_resource_type,
+        });
+      }
+      return out;
     }
 
     case "cdp_navigate": {
@@ -677,16 +721,37 @@ async function handleTool(name, args) {
       return { waited: timeout };
     }
 
-    case "cdp_network_log": {
+    case "cdp_network_start": {
       const s = getSession(args.session_id);
-      const entries = queryNetwork(s.net.entries, args);
-      return { count: entries.length, total: s.net.entries.length, entries };
+      const capture = await beginCapture(s.net, {
+        dir: args.dir,
+        url_contains: args.url_contains,
+        method: args.method,
+        resource_type: args.resource_type,
+      });
+      return { started: true, ...capture };
     }
 
-    case "cdp_network_clear": {
+    case "cdp_network_stop": {
       const s = getSession(args.session_id);
-      s.net.entries.length = 0;
-      return { cleared: true };
+      disableCapture(s.net);
+      return { stopped: true, dir: s.net.dir, saved: s.net.saved, skipped: s.net.skipped };
+    }
+
+    case "cdp_network_log": {
+      const s = getSession(args.session_id);
+      if (!s.net.dir) {
+        throw new Error("capture is off; pass capture_dir to cdp_connect or call cdp_network_start");
+      }
+      const entries = await querySaved(s.net.dir, args);
+      return {
+        dir: s.net.dir,
+        enabled: s.net.enabled,
+        saved: s.net.saved,
+        skipped: s.net.skipped,
+        count: entries.length,
+        entries,
+      };
     }
 
     case "cdp_wait_response": {
