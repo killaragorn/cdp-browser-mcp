@@ -46,10 +46,6 @@
     "url": "https://github.com/killaragorn/cdp-browser-mcp/issues"
   },
   "homepage": "https://github.com/killaragorn/cdp-browser-mcp#readme",
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "patchright": "^1.52.0"

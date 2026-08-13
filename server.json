@@ -2,21 +2,10 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.killaragorn/cdp-browser",
   "title": "CDP Browser",
-  "description": "Attach to existing Chromium browsers over CDP and control them with multi-session MCP tools. Works with Chrome/Edge remote debugging, AdsPower, BitBrowser, and cloud CDP endpoints.",
+  "description": "Attach to existing Chromium browsers over CDP and control them with multi-session MCP tools. Install via npx github:killaragorn/cdp-browser-mcp.",
   "repository": {
     "url": "https://github.com/killaragorn/cdp-browser-mcp",
     "source": "github"
   },
-  "version": "1.0.0",
-  "packages": [
-    {
-      "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "cdp-browser-mcp",
-      "version": "1.0.0",
-      "transport": {
-        "type": "stdio"
-      }
-    }
-  ]
+  "version": "1.0.0"
 }

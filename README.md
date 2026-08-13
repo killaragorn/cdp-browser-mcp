@@ -10,11 +10,13 @@ Works with:
 
 Uses [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) (`connectOverCDP`) so the attached context is less likely to be patched by anti-bot checks than stock Playwright.
 
-## Install
+Install from GitHub (no npm publish). Requires **Node.js 18+**. No Chromium download is needed.
 
-Requires **Node.js 18+**. No Chromium download is needed; you connect to a browser that is already open.
+```text
+npx -y github:killaragorn/cdp-browser-mcp
+```
 
-### Cursor
+## Cursor
 
 Add to `~/.cursor/mcp.json` (or project `.cursor/mcp.json`):
 
@@ -23,13 +25,13 @@ Add to `~/.cursor/mcp.json` (or project `.cursor/mcp.json`):
   "mcpServers": {
     "cdp-browser": {
       "command": "npx",
-      "args": ["-y", "cdp-browser-mcp"]
+      "args": ["-y", "github:killaragorn/cdp-browser-mcp"]
     }
   }
 }
 ```
 
-### Claude Desktop
+## Claude Desktop
 
 Add to `claude_desktop_config.json`:
 
@@ -41,17 +43,54 @@ Add to `claude_desktop_config.json`:
   "mcpServers": {
     "cdp-browser": {
       "command": "npx",
-      "args": ["-y", "cdp-browser-mcp"]
+      "args": ["-y", "github:killaragorn/cdp-browser-mcp"]
     }
   }
 }
 ```
 
-### Claude Code
+## Claude Code
 
 ```bash
-claude mcp add cdp-browser -- npx -y cdp-browser-mcp
+claude mcp add --scope user cdp-browser -- npx -y github:killaragorn/cdp-browser-mcp
 ```
+
+Or commit `.mcp.json` in a project so teammates get the same server:
+
+```json
+{
+  "mcpServers": {
+    "cdp-browser": {
+      "command": "npx",
+      "args": ["-y", "github:killaragorn/cdp-browser-mcp"]
+    }
+  }
+}
+```
+
+## Codex
+
+```bash
+codex mcp add cdp-browser -- npx -y github:killaragorn/cdp-browser-mcp
+```
+
+Or add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.cdp-browser]
+command = "npx"
+args = ["-y", "github:killaragorn/cdp-browser-mcp"]
+```
+
+## Local clone
+
+```bash
+git clone https://github.com/killaragorn/cdp-browser-mcp.git
+cd cdp-browser-mcp
+npm install
+```
+
+Then point the client at `node /absolute/path/to/cdp-browser-mcp/index.mjs`.
 
 ## Typical flow
 

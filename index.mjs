@@ -12,9 +12,9 @@ const VERSION = "1.0.0";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   process.stdout.write(
-    `${NAME} ${VERSION} (npm: cdp-browser-mcp)\n` +
+    `${NAME} ${VERSION}\n` +
       "MCP stdio server — attach to existing Chromium browsers over CDP.\n" +
-      "Configure in Cursor / Claude with: npx -y cdp-browser-mcp\n"
+      "Configure with: npx -y github:killaragorn/cdp-browser-mcp\n"
   );
   process.exit(0);
 }
