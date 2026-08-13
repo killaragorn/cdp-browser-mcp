@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { chromium } from "patchright";
 
-const NAME = "cdp-browser";
+const NAME = "cdp-browser-mcp";
 const VERSION = "1.0.0";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {

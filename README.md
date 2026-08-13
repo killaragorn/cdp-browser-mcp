@@ -23,7 +23,7 @@ Add to `~/.cursor/mcp.json` (or project `.cursor/mcp.json`):
 ```json
 {
   "mcpServers": {
-    "cdp-browser": {
+    "cdp-browser-mcp": {
       "command": "npx",
       "args": ["-y", "github:killaragorn/cdp-browser-mcp"]
     }
@@ -41,7 +41,7 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "cdp-browser": {
+    "cdp-browser-mcp": {
       "command": "npx",
       "args": ["-y", "github:killaragorn/cdp-browser-mcp"]
     }
@@ -52,7 +52,7 @@ Add to `claude_desktop_config.json`:
 ## Claude Code
 
 ```bash
-claude mcp add --scope user cdp-browser -- npx -y github:killaragorn/cdp-browser-mcp
+claude mcp add --scope user cdp-browser-mcp -- npx -y github:killaragorn/cdp-browser-mcp
 ```
 
 Or commit `.mcp.json` in a project so teammates get the same server:
@@ -60,7 +60,7 @@ Or commit `.mcp.json` in a project so teammates get the same server:
 ```json
 {
   "mcpServers": {
-    "cdp-browser": {
+    "cdp-browser-mcp": {
       "command": "npx",
       "args": ["-y", "github:killaragorn/cdp-browser-mcp"]
     }
@@ -71,13 +71,13 @@ Or commit `.mcp.json` in a project so teammates get the same server:
 ## Codex
 
 ```bash
-codex mcp add cdp-browser -- npx -y github:killaragorn/cdp-browser-mcp
+codex mcp add cdp-browser-mcp -- npx -y github:killaragorn/cdp-browser-mcp
 ```
 
 Or add to `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.cdp-browser]
+[mcp_servers.cdp-browser-mcp]
 command = "npx"
 args = ["-y", "github:killaragorn/cdp-browser-mcp"]
 ```

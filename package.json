@@ -16,7 +16,7 @@
   "scripts": {
     "start": "node index.mjs"
   },
-  "mcpName": "io.github.killaragorn/cdp-browser",
+  "mcpName": "io.github.killaragorn/cdp-browser-mcp",
   "engines": {
     "node": ">=18"
   },

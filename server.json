@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.killaragorn/cdp-browser",
+  "name": "io.github.killaragorn/cdp-browser-mcp",
   "title": "CDP Browser",
   "description": "Attach to existing Chromium browsers over CDP and control them with multi-session MCP tools. Install via npx github:killaragorn/cdp-browser-mcp.",
   "repository": {
